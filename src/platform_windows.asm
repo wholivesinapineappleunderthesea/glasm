@@ -8,6 +8,12 @@ EXTERN GetProcessHeap: PROC
 EXTERN HeapAlloc: PROC
 EXTERN HeapFree: PROC
 
+; POINT
+POINT STRUCT
+	x SDWORD ?
+	y SDWORD ?
+POINT ENDS
+
 ; WNDCLASSEXW
 WNDCLASSEXW STRUCT
 	cbSize DWORD ?
@@ -24,12 +30,26 @@ WNDCLASSEXW STRUCT
 	hIconSm QWORD ?
 WNDCLASSEXW ENDS
 
+; MSG
+MSG STRUCT 16
+	hwnd QWORD ?
+	message DWORD ?
+	wParam QWORD ?
+	lParam QWORD ?
+	time DWORD ?
+	pt POINT <>
+	lPrivate DWORD ?
+MSG ENDS
+
 EXTERN RegisterClassExW: PROC
 EXTERN CreateWindowExW: PROC
 EXTERN DefWindowProcW: PROC
 EXTERN DestroyWindow: PROC
 EXTERN ShowWindow: PROC
 EXTERN UpdateWindow: PROC
+EXTERN PeekMessageW: PROC
+EXTERN TranslateMessage: PROC
+EXTERN DispatchMessageW: PROC
 
 .DATA
 globModuleSize DWORD 0
@@ -147,7 +167,10 @@ win_free PROC
 win_free endp
 
 win_create_window PROC
-	sub rsp, (28h + SIZEOF WNDCLASSEXW + 20h)
+	; 28h shadow + raddr
+	; SIZEOF WNDCLASSEXW 
+	; 80h CreateWindowExW params
+	sub rsp, (28h + SIZEOF WNDCLASSEXW + 80h)
 	; set up WNDCLASSEXW
 	lea rcx, [rsp + 28h]
 	mov dword ptr [rcx + WNDCLASSEXW.cbSize], SIZEOF WNDCLASSEXW
@@ -207,12 +230,65 @@ win_create_window_class_success:
 	mov rcx, rax
 	call UpdateWindow
 
-	add rsp, (28h + SIZEOF WNDCLASSEXW + 20h)
+	add rsp, (28h + SIZEOF WNDCLASSEXW + 80h)
 	ret
 win_create_window endp
 
+win_dispatch_messages PROC
+	; 20h shadow,
+	; 8h PeekMessageW wRemoveMsg
+	; 8h raddr
+	sub rsp, (28h + SIZEOF MSG + 8h)
+	push rsi
+	;mov qword ptr [rsp + 28h + SIZEOF MSG], rsi
+	xor sil, sil
+peek_loop:
+	lea rcx, [rsp + 28h] ; msg
+	; zero out MSG
+	mov qword ptr [rcx + MSG.hwnd], 0
+	mov dword ptr [rcx + MSG.message], 0
+	mov qword ptr [rcx + MSG.wParam], 0
+	mov qword ptr [rcx + MSG.lParam], 0
+	mov dword ptr [rcx + MSG.time], 0
+	mov dword ptr [rcx + MSG.pt.x], 0
+	mov dword ptr [rcx + MSG.pt.y], 0
+	mov dword ptr [rcx + MSG.lPrivate], 0
+
+	; peek message
+	xor edx, edx ; hWnd
+	mov r8, 0 ; wMsgFilterMin
+	mov r9, 0 ; wMsgFilterMax
+	mov dword ptr [rsp + 20h], 1 ; wRemoveMsg
+	call PeekMessageW
+	test eax, eax
+	jz peek_loop_end
+
+	; translate message
+	lea rcx, [rsp + 28h] ; lpMsg
+	call TranslateMessage
+
+	; dispatch message
+	lea rcx, [rsp + 28h] ; lpMsg
+	call DispatchMessageW
+
+	; test if exit message
+	mov eax, dword ptr [rsp + 28h + MSG.message]
+	cmp eax, 12h ; WM_QUIT
+	sete al
+	or sil, al
+
+	jmp peek_loop
+
+peek_loop_end:
+	mov al, sil
+	;mov rsi, qword ptr [rsp + 28h + SIZEOF MSG]
+	pop rsi
+	add rsp, (28h + SIZEOF MSG + 8h)
+	ret
+win_dispatch_messages endp
+
 win_destroy_window PROC
-	sub rsp, 28h ; shadow space
+	sub rsp, 28h ; shadow+raddr
 
 	mov rcx, globWindowHandle
 	test rcx, rcx
@@ -220,7 +296,7 @@ win_destroy_window PROC
 	call DestroyWindow
 	win_destroy_window_skip:
 
-	add rsp, 28h ; shadow space
+	add rsp, 28h ; shadow+raddr
 	ret
 win_destroy_window endp
 

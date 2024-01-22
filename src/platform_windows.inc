@@ -20,4 +20,5 @@ EXTERN win_free:PROC
 ; window
 EXTERN globWindowHandle:QWORD
 EXTERN win_create_window:PROC
+EXTERN win_dispatch_messages:PROC
 EXTERN win_destroy_window:PROC

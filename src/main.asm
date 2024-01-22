@@ -8,6 +8,11 @@ asm_entry PROC
 
 	call win_create_window
 
+window_loop:
+	call win_dispatch_messages
+	test al, al
+	jz window_loop
+
 	call win_destroy_window
 
 	call win_uninit
