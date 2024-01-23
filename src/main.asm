@@ -1,6 +1,6 @@
 INCLUDE masm_macros.inc
 INCLUDE platform_windows.inc
-;INCLUDE gl.inc
+INCLUDE gl.inc
 .CODE
 
 asm_entry PROC
@@ -9,10 +9,15 @@ asm_entry PROC
 
 	call win_create_window
 
+	jmp window_loop
+one_frame:
+	call glasm_beginframe
+	call win_swap_buffers
+	call glasm_endframe
 window_loop:
 	call win_dispatch_messages
 	test al, al
-	jz window_loop
+	jz one_frame
 
 	call win_destroy_window
 

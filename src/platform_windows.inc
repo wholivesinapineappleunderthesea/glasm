@@ -23,4 +23,5 @@ EXTERN globWindowDC:QWORD
 EXTERN globWindowGLRC:QWORD
 EXTERN win_create_window:PROC
 EXTERN win_dispatch_messages:PROC
+EXTERN win_swap_buffers:PROC
 EXTERN win_destroy_window:PROC

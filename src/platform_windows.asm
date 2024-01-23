@@ -3,6 +3,7 @@ INCLUDE gl.inc
 
 INCLUDE masm_macros.inc
 
+EXTERN GetProcAddress: PROC
 EXTERN GetModuleHandleW: PROC
 EXTERN GetModuleFileNameW: PROC
 EXTERN ExitProcess: PROC
@@ -81,6 +82,7 @@ EXTERN DefWindowProcW: PROC
 EXTERN PostQuitMessage: PROC
 EXTERN ShowWindow: PROC
 EXTERN UpdateWindow: PROC
+EXTERN SwapBuffers: PROC
 
 EXTERN RegisterClassExW: PROC
 EXTERN CreateWindowExW: PROC
@@ -123,6 +125,7 @@ PUBLIC globWindowGLRC
 
 .CONST
 winClassName DW 'g', 'l', 'a', 's', 'm', '0', '1', 0
+winGlDllName DW 'o', 'p', 'e', 'n', 'g', 'l', '3', '2', '.', 'd', 'l', 'l', 0
 
 .CODE
 win_init PROC
@@ -227,6 +230,38 @@ win_free PROC
 win_free_skip:
 	ret
 win_free endp
+
+win_gl_get_proc_address PROC
+	; 28h shadow+call
+	; 8h procName
+	sub rsp, 28h + 8h
+
+	push rsi
+	mov rsi, rcx
+
+	call wglGetProcAddress
+	test rax, rax
+	jnz win_gl_get_proc_address_success
+
+	lea rcx, winGlDllName
+	call GetModuleHandleW
+	test rax, rax
+	jnz win_gl_get_proc_address_getmod_success
+	int 3
+win_gl_get_proc_address_getmod_success:
+
+	mov rcx, rax
+	mov rdx, rsi
+	call GetProcAddress
+	test rax, rax
+	jnz win_gl_get_proc_address_success
+	int 3
+
+win_gl_get_proc_address_success:
+	pop rsi
+	add rsp, 28h + 8h
+	ret
+win_gl_get_proc_address endp
 
 win_wndproc PROC
 	; 28h shadow+call
@@ -338,7 +373,7 @@ win_create_wgl_create_success:
 	int 3
 win_create_wgl_makecur_success:
 
-	lea rax, wglGetProcAddress
+	lea rax, win_gl_get_proc_address
 	mov globglGetProcAddress, rax
 
 	call glasm_init
@@ -478,6 +513,17 @@ peek_loop_end:
 	add rsp, (28h + ALIGN_TO_16(SIZEOF MSG) + 8h)
 	ret
 win_dispatch_messages endp
+
+win_swap_buffers PROC
+	; 28h shadow+call
+	sub rsp, 28h
+
+	mov rcx, globWindowDC
+	call SwapBuffers
+
+	add rsp, 28h
+	ret
+win_swap_buffers endp
 
 win_destroy_window PROC
 	; shadow+call
