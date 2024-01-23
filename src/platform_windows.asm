@@ -1,4 +1,5 @@
 ;INCLUDE platform_windows.inc
+INCLUDE gl.inc
 
 INCLUDE masm_macros.inc
 
@@ -91,6 +92,7 @@ EXTERN SetPixelFormat: PROC
 EXTERN wglCreateContext: PROC
 EXTERN wglMakeCurrent: PROC
 EXTERN wglDeleteContext: PROC
+EXTERN wglGetProcAddress: PROC
 
 .DATA
 globModuleSize DWORD 0
@@ -335,6 +337,11 @@ win_create_wgl_create_success:
 	jnz win_create_wgl_makecur_success
 	int 3
 win_create_wgl_makecur_success:
+
+	lea rax, wglGetProcAddress
+	mov globglGetProcAddress, rax
+
+	call glasm_init
 
 	add rsp, (28h + ALIGN_TO_16(SIZEOF PIXELFORMATDESCRIPTOR))
 	ret

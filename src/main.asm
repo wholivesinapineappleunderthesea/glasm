@@ -1,5 +1,6 @@
 INCLUDE masm_macros.inc
 INCLUDE platform_windows.inc
+;INCLUDE gl.inc
 .CODE
 
 asm_entry PROC
