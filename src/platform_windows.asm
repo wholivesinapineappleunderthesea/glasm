@@ -1,5 +1,7 @@
 ;INCLUDE platform_windows.inc
 
+INCLUDE masm_macros.inc
+
 EXTERN GetModuleHandleW: PROC
 EXTERN GetModuleFileNameW: PROC
 EXTERN ExitProcess: PROC
@@ -31,7 +33,7 @@ WNDCLASSEXW STRUCT
 WNDCLASSEXW ENDS
 
 ; MSG
-MSG STRUCT 16
+MSG STRUCT
 	hwnd QWORD ?
 	message DWORD ?
 	wParam QWORD ?
@@ -41,16 +43,54 @@ MSG STRUCT 16
 	lPrivate DWORD ?
 MSG ENDS
 
-EXTERN DefWindowProcW: PROC
-EXTERN PostQuitMessage: PROC
-EXTERN RegisterClassExW: PROC
-EXTERN CreateWindowExW: PROC
-EXTERN DestroyWindow: PROC
-EXTERN ShowWindow: PROC
-EXTERN UpdateWindow: PROC
+; PIXELFORMATDESCRIPTOR
+PIXELFORMATDESCRIPTOR STRUCT
+	nSize WORD ?
+	nVersion WORD ?
+	dwFlags DWORD ?
+	iPixelType BYTE ?
+	cColorBits BYTE ?
+	cRedBits BYTE ?
+	cRedShift BYTE ?
+	cGreenBits BYTE ?
+	cGreenShift BYTE ?
+	cBlueBits BYTE ?
+	cBlueShift BYTE ?
+	cAlphaBits BYTE ?
+	cAlphaShift BYTE ?
+	cAccumBits BYTE ?
+	cAccumRedBits BYTE ?
+	cAccumGreenBits BYTE ?
+	cAccumBlueBits BYTE ?
+	cAccumAlphaBits BYTE ?
+	cDepthBits BYTE ?
+	cStencilBits BYTE ?
+	cAuxBuffers BYTE ?
+	iLayerType BYTE ?
+	bReserved BYTE ?
+	dwLayerMask DWORD ?
+	dwVisibleMask DWORD ?
+	dwDamageMask DWORD ?
+PIXELFORMATDESCRIPTOR ENDS
+
 EXTERN PeekMessageW: PROC
 EXTERN TranslateMessage: PROC
 EXTERN DispatchMessageW: PROC
+EXTERN DefWindowProcW: PROC
+EXTERN PostQuitMessage: PROC
+EXTERN ShowWindow: PROC
+EXTERN UpdateWindow: PROC
+
+EXTERN RegisterClassExW: PROC
+EXTERN CreateWindowExW: PROC
+EXTERN DestroyWindow: PROC
+
+EXTERN GetDC: PROC
+EXTERN ChoosePixelFormat: PROC
+EXTERN SetPixelFormat: PROC
+EXTERN wglCreateContext: PROC
+EXTERN wglMakeCurrent: PROC
+EXTERN wglDeleteContext: PROC
 
 .DATA
 globModuleSize DWORD 0
@@ -74,14 +114,18 @@ PUBLIC globProcHeapHandle
 
 globWindowHandle QWORD 0
 PUBLIC globWindowHandle
+globWindowDC QWORD 0
+PUBLIC globWindowDC 
+globWindowGLRC QWORD 0
+PUBLIC globWindowGLRC
 
 .CONST
 winClassName DW 'g', 'l', 'a', 's', 'm', '0', '1', 0
 
 .CODE
 win_init PROC
-	; 28h shadow+raddr
-	sub rsp, 28h
+	; 28h shadow+call
+	sub rsp, (28h)
 
 	; set globModuleHandle
 	xor rcx, rcx
@@ -133,32 +177,32 @@ cont_backslash:
 	call GetProcessHeap
 	mov globProcHeapHandle, rax
 
-	add rsp, 28h
+	add rsp, (28h)
 	ret
 win_init endp
 
 win_uninit PROC
-	; 28h shadow+raddr
-	sub rsp, 28h
+	; 28h shadow+call
+	sub rsp, (28h)
 	
 	call win_destroy_window
 
-	add rsp, 28h
+	add rsp, (28h)
 	ret
 win_uninit endp
 
 win_terminate PROC
-	; 28h shadow+raddr
-	sub rsp, 28h
+	; 28h shadow+call
+	sub rsp, (28h)
 	mov ecx, 0 ; uExitCode
 	call ExitProcess
 	int 3
-	add rsp, 28h
+	add rsp, (28h)
 win_terminate endp
 
 win_alloc PROC
-	; 28h shadow+raddr
-	sub rsp, 28h
+	; 28h shadow+call
+	sub rsp, (28h)
 	mov r8d, ecx ; dwBytes
 	mov edx, 8 ; dwFlags, HEAP_ZERO_MEMORY
 	mov rcx, globProcHeapHandle ; hHeap
@@ -167,7 +211,7 @@ win_alloc PROC
 	jnz win_alloc_success
 	int 3
 win_alloc_success:
-	add rsp, 28h
+	add rsp, (28h)
 	ret
 win_alloc endp	
 
@@ -183,7 +227,7 @@ win_free_skip:
 win_free endp
 
 win_wndproc PROC
-	; 28h shadow+raddr
+	; 28h shadow+call
 	; 8h hWnd
 	; 8h uMsg
 	; 8h wParam
@@ -199,6 +243,17 @@ win_wndproc PROC
 	jne not_wm_destroy
 	xor ecx, ecx ; uExitCode
 	call PostQuitMessage
+
+	mov rcx, globWindowGLRC
+	test rcx, rcx
+	jz win_destroy_glrc_done
+	call wglDeleteContext
+	mov globWindowGLRC, 0
+win_destroy_glrc_done:
+
+	mov globWindowDC, 0
+	mov globWindowHandle, 0
+
 	xor eax, eax ; If an application processes this message, it should return zero.
 	jmp wndproc_handled
 not_wm_destroy:
@@ -216,16 +271,85 @@ call_defwndproc:
 	jmp DefWindowProcW
 win_wndproc endp
 
+win_create_wgl PROC
+	; 28h shadow+call
+	; SIZEOF PIXELFORMATDESCRIPTOR
+	sub rsp, (28h + ALIGN_TO_16(SIZEOF PIXELFORMATDESCRIPTOR))
+
+	mov rcx, globWindowDC
+	lea rdx, [rsp + 28h] ; ppfd
+	mov word ptr [rdx + PIXELFORMATDESCRIPTOR.nSize], SIZEOF PIXELFORMATDESCRIPTOR
+	mov word ptr [rdx + PIXELFORMATDESCRIPTOR.nVersion], 1h
+	mov dword ptr [rdx + PIXELFORMATDESCRIPTOR.dwFlags], 25h ; PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.iPixelType], 0 ; PFD_TYPE_RGBA
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.cColorBits], 20h ; 32
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.cRedBits], 0
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.cRedShift], 0
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.cGreenBits], 0
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.cGreenShift], 0
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.cBlueBits], 0
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.cBlueShift], 0
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.cAlphaBits], 0
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.cAlphaShift], 0
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.cAccumBits], 0
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.cAccumRedBits], 0
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.cAccumGreenBits], 0
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.cAccumBlueBits], 0
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.cAccumAlphaBits], 0
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.cDepthBits], 32 
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.cStencilBits], 8
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.cAuxBuffers], 0
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.iLayerType], 0
+	mov byte ptr [rdx + PIXELFORMATDESCRIPTOR.bReserved], 0
+	mov dword ptr [rdx + PIXELFORMATDESCRIPTOR.dwLayerMask], 0
+	mov dword ptr [rdx + PIXELFORMATDESCRIPTOR.dwVisibleMask], 0
+	mov dword ptr [rdx + PIXELFORMATDESCRIPTOR.dwDamageMask], 0
+
+	call ChoosePixelFormat
+	test eax, eax
+	jnz win_create_wgl_choose_success
+	int 3
+win_create_wgl_choose_success:
+	
+	mov rcx, globWindowDC
+	mov edx, eax
+	lea r8, [rsp + 28h] ; ppfd
+	call SetPixelFormat
+	test eax, eax
+	jnz win_create_wgl_set_success
+	int 3
+win_create_wgl_set_success:
+
+	mov rcx, globWindowDC
+	call wglCreateContext
+	test rax, rax
+	jnz win_create_wgl_create_success
+	int 3
+win_create_wgl_create_success:
+	mov globWindowGLRC, rax
+
+	mov rcx, globWindowDC
+	mov rdx, rax
+	call wglMakeCurrent
+	test eax, eax
+	jnz win_create_wgl_makecur_success
+	int 3
+win_create_wgl_makecur_success:
+
+	add rsp, (28h + ALIGN_TO_16(SIZEOF PIXELFORMATDESCRIPTOR))
+	ret
+win_create_wgl endp
+
 win_create_window PROC
-	; 28h shadow + raddr
+	; 28h shadow + call
 	; SIZEOF WNDCLASSEXW 
 	; 80h CreateWindowExW params
-	sub rsp, (28h + SIZEOF WNDCLASSEXW + 80h)
+	sub rsp, (28h + ALIGN_TO_16(SIZEOF WNDCLASSEXW) + 80h)
 
 	; set up WNDCLASSEXW
 	lea rcx, [rsp + 28h]
 	mov dword ptr [rcx + WNDCLASSEXW.cbSize], SIZEOF WNDCLASSEXW
-	mov dword ptr [rcx + WNDCLASSEXW.style], 3h ; CS_HREDRAW | CS_VREDRAW
+	mov dword ptr [rcx + WNDCLASSEXW.style], 023h ; CS_HREDRAW | CS_VREDRAW | CS_OWNDC
 	lea rax, win_wndproc
 	mov qword ptr [rcx + WNDCLASSEXW.lpfnWndProc], rax
 	mov dword ptr [rcx + WNDCLASSEXW.cbClsExtra], 0
@@ -282,16 +406,27 @@ win_create_window_hwnd_success:
 	mov rcx, globWindowHandle
 	call UpdateWindow
 
-	add rsp, (28h + SIZEOF WNDCLASSEXW + 80h)
+	mov rcx, globWindowHandle
+	call GetDC
+	test rax, rax
+	jnz win_create_window_dc_success
+	int 3
+win_create_window_dc_success:
+	mov globWindowDC, rax
+
+	call win_create_wgl
+
+	add rsp, (28h + ALIGN_TO_16(SIZEOF WNDCLASSEXW) + 80h)
 	ret
 win_create_window endp
 
 win_dispatch_messages PROC
-	; 28h shadow+raddr
+	; 28h shadow+call
+	; SIZEOF MSG
 	; 8h PeekMessageW wRemoveMsg
-	sub rsp, (28h + SIZEOF MSG + 8h)
+	sub rsp, (28h + ALIGN_TO_16(SIZEOF MSG) + 8h)
+
 	push rsi
-	;mov qword ptr [rsp + 28h + SIZEOF MSG], rsi
 	xor sil, sil
 peek_loop:
 	lea rcx, [rsp + 28h] ; msg
@@ -332,21 +467,21 @@ peek_loop:
 
 peek_loop_end:
 	mov al, sil
-	;mov rsi, qword ptr [rsp + 28h + SIZEOF MSG]
 	pop rsi
-	add rsp, (28h + SIZEOF MSG + 8h)
+	add rsp, (28h + ALIGN_TO_16(SIZEOF MSG) + 8h)
 	ret
 win_dispatch_messages endp
 
 win_destroy_window PROC
-	; shadow+raddr
+	; shadow+call
 	sub rsp, 28h
 
 	mov rcx, globWindowHandle
 	test rcx, rcx
-	jz win_destroy_window_skip
+	jz win_destroy_window_done
 	call DestroyWindow
-	win_destroy_window_skip:
+	mov globWindowHandle, 0
+win_destroy_window_done:
 
 	add rsp, 28h
 	ret

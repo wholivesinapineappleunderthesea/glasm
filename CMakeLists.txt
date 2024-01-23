@@ -27,3 +27,6 @@ set_target_properties(glasm PROPERTIES LINK_FLAGS "/NODEFAULTLIB")
 
 # set entry point
 set_target_properties(glasm PROPERTIES LINK_FLAGS "/ENTRY:asm_entry")
+
+# link with opengl32.lib
+target_link_libraries(glasm opengl32.lib)
