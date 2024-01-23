@@ -41,9 +41,10 @@ MSG STRUCT 16
 	lPrivate DWORD ?
 MSG ENDS
 
+EXTERN DefWindowProcW: PROC
+EXTERN PostQuitMessage: PROC
 EXTERN RegisterClassExW: PROC
 EXTERN CreateWindowExW: PROC
-EXTERN DefWindowProcW: PROC
 EXTERN DestroyWindow: PROC
 EXTERN ShowWindow: PROC
 EXTERN UpdateWindow: PROC
@@ -79,7 +80,8 @@ winClassName DW 'g', 'l', 'a', 's', 'm', '0', '1', 0
 
 .CODE
 win_init PROC
-	sub rsp, 28h ; shadow space
+	; 28h shadow+raddr
+	sub rsp, 28h
 
 	; set globModuleHandle
 	xor rcx, rcx
@@ -131,51 +133,100 @@ cont_backslash:
 	call GetProcessHeap
 	mov globProcHeapHandle, rax
 
-	add rsp, 28h ; shadow space
+	add rsp, 28h
 	ret
 win_init endp
 
 win_uninit PROC
-	sub rsp, 28h ; shadow space
-
+	; 28h shadow+raddr
+	sub rsp, 28h
+	
 	call win_destroy_window
 
-	add rsp, 28h ; shadow space
+	add rsp, 28h
 	ret
 win_uninit endp
 
 win_terminate PROC
-	sub rsp, 28h ; shadow space
+	; 28h shadow+raddr
+	sub rsp, 28h
 	mov ecx, 0 ; uExitCode
 	call ExitProcess
 	int 3
-	add rsp, 28h ; shadow space
+	add rsp, 28h
 win_terminate endp
 
 win_alloc PROC
+	; 28h shadow+raddr
+	sub rsp, 28h
 	mov r8d, ecx ; dwBytes
 	mov edx, 8 ; dwFlags, HEAP_ZERO_MEMORY
 	mov rcx, globProcHeapHandle ; hHeap
-	jmp HeapAlloc
+	call HeapAlloc
+	test rax, rax
+	jnz win_alloc_success
+	int 3
+win_alloc_success:
+	add rsp, 28h
+	ret
 win_alloc endp	
 
 win_free PROC
+	test rcx, rcx
+	jz win_free_skip
 	mov r8, rcx ; lpMem
 	xor edx, edx ; dwFlags
 	mov rcx, globProcHeapHandle ; hHeap
 	jmp HeapFree
+win_free_skip:
+	ret
 win_free endp
+
+win_wndproc PROC
+	; 28h shadow+raddr
+	; 8h hWnd
+	; 8h uMsg
+	; 8h wParam
+	; 8h lParam
+	sub rsp, (28h + 8h + 8h + 8h + 8h)
+	mov qword ptr [rsp + 28h], rcx ; hWnd
+	mov dword ptr [rsp + 30h], edx ; uMsg
+	mov qword ptr [rsp + 38h], r8 ; wParam
+	mov qword ptr [rsp + 40h], r9 ; lParam
+
+	; WM_DESTROY
+	cmp edx, 02h ; WM_DESTROY
+	jne not_wm_destroy
+	xor ecx, ecx ; uExitCode
+	call PostQuitMessage
+	xor eax, eax ; If an application processes this message, it should return zero.
+	jmp wndproc_handled
+not_wm_destroy:
+
+	jmp call_defwndproc
+wndproc_handled:
+	add rsp, (28h + 8h + 8h + 8h + 8h)
+	ret
+call_defwndproc:
+	mov rcx, qword ptr [rsp + 28h] ; hWnd
+	mov edx, dword ptr [rsp + 30h] ; uMsg
+	mov r8, qword ptr [rsp + 38h] ; wParam
+	mov r9, qword ptr [rsp + 40h] ; lParam
+	add rsp, (28h + 8h + 8h + 8h + 8h)
+	jmp DefWindowProcW
+win_wndproc endp
 
 win_create_window PROC
 	; 28h shadow + raddr
 	; SIZEOF WNDCLASSEXW 
 	; 80h CreateWindowExW params
 	sub rsp, (28h + SIZEOF WNDCLASSEXW + 80h)
+
 	; set up WNDCLASSEXW
 	lea rcx, [rsp + 28h]
 	mov dword ptr [rcx + WNDCLASSEXW.cbSize], SIZEOF WNDCLASSEXW
 	mov dword ptr [rcx + WNDCLASSEXW.style], 3h ; CS_HREDRAW | CS_VREDRAW
-	lea rax, DefWindowProcW
+	lea rax, win_wndproc
 	mov qword ptr [rcx + WNDCLASSEXW.lpfnWndProc], rax
 	mov dword ptr [rcx + WNDCLASSEXW.cbClsExtra], 0
 	mov dword ptr [rcx + WNDCLASSEXW.cbWndExtra], 0
@@ -183,7 +234,7 @@ win_create_window PROC
 	mov qword ptr [rcx + WNDCLASSEXW.hInstance], rax
 	mov qword ptr [rcx + WNDCLASSEXW.hIcon], 0
 	mov qword ptr [rcx + WNDCLASSEXW.hCursor], 0
-	mov qword ptr [rcx + WNDCLASSEXW.hbrBackground], 6
+	mov qword ptr [rcx + WNDCLASSEXW.hbrBackground], 6 ; COLOR_WINDOW
 	mov qword ptr [rcx + WNDCLASSEXW.lpszMenuName], 0
 	lea rax, winClassName
 	mov qword ptr [rcx + WNDCLASSEXW.lpszClassName], rax
@@ -221,13 +272,14 @@ win_create_window_class_success:
 	test rax, rax
 	jnz win_create_window_hwnd_success
 	int 3
-	win_create_window_hwnd_success:
-
+win_create_window_hwnd_success:
 	mov globWindowHandle, rax
+
 	mov rcx, rax
 	mov edx, 5 ; SW_SHOW
 	call ShowWindow
-	mov rcx, rax
+
+	mov rcx, globWindowHandle
 	call UpdateWindow
 
 	add rsp, (28h + SIZEOF WNDCLASSEXW + 80h)
@@ -235,9 +287,8 @@ win_create_window_class_success:
 win_create_window endp
 
 win_dispatch_messages PROC
-	; 20h shadow,
+	; 28h shadow+raddr
 	; 8h PeekMessageW wRemoveMsg
-	; 8h raddr
 	sub rsp, (28h + SIZEOF MSG + 8h)
 	push rsi
 	;mov qword ptr [rsp + 28h + SIZEOF MSG], rsi
@@ -288,7 +339,8 @@ peek_loop_end:
 win_dispatch_messages endp
 
 win_destroy_window PROC
-	sub rsp, 28h ; shadow+raddr
+	; shadow+raddr
+	sub rsp, 28h
 
 	mov rcx, globWindowHandle
 	test rcx, rcx
@@ -296,7 +348,7 @@ win_destroy_window PROC
 	call DestroyWindow
 	win_destroy_window_skip:
 
-	add rsp, 28h ; shadow+raddr
+	add rsp, 28h
 	ret
 win_destroy_window endp
 
